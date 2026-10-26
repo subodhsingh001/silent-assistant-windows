@@ -1,4 +1,4 @@
-# Silent Assistant for Windows
+# Desk Notes for Windows
 
 An Electron desktop overlay for transcribing system audio into English, suggesting answers, and generating meeting notes using Google Gemini. Source code is in `silent-assistant/`.
 
@@ -54,13 +54,24 @@ npm.cmd test
 npm.cmd run dist
 ```
 
-The Windows NSIS installer is generated in `silent-assistant/dist/`. Build output is excluded from Git; distribute installers separately, for example through GitHub Releases. `npm.cmd run pack` creates an unpacked app for local inspection instead of an installer.
+The Windows NSIS installer is generated in `silent-assistant/dist/desk-notes/`. Build output is excluded from Git; distribute installers separately, for example through GitHub Releases. `npm.cmd run pack` creates an unpacked app for local inspection instead of an installer. The separate output folder lets an older Silent Assistant build remain running while the new build is prepared.
 
-The packaged Windows executable is `Silent Assistant.exe`, with the product name **Silent Assistant**. Launch the packaged executable or installed app to use this name in Task Manager; `npm.cmd start` still launches the Electron development executable. The running app remains visible in process monitors, and Electron may run several child processes. This naming does not disguise the app as a Windows service or guarantee exclusion from screen capture.
+The packaged Windows executable is `Desk Notes.exe`, with the product name **Desk Notes**. Launch the packaged executable or installed app to use this name in Task Manager; `npm.cmd start` still launches the Electron development executable. The running app remains visible in process monitors, and Electron may run several child processes. This naming does not disguise the app as a Windows service or guarantee exclusion from screen capture.
 
-After building, double-click `Start Silent Assistant.cmd` in the repository root, or open `silent-assistant\dist\win-unpacked` in File Explorer and double-click `Silent Assistant.exe`. The launcher clears `ELECTRON_RUN_AS_NODE` for the child app, since development tools can set that environment variable and cause Electron to start without a window. A file link in chat may only select or open the file location rather than execute it.
+After building, double-click `Start Silent Assistant.cmd` in the repository root (the existing launcher name is retained), or open `silent-assistant\dist\desk-notes\win-unpacked` in File Explorer and double-click `Desk Notes.exe`. The launcher clears `ELECTRON_RUN_AS_NODE` for the child app, since development tools can set that environment variable and cause Electron to start without a window. A file link in chat may only select or open the file location rather than execute it.
 
-A machine using the built installer does **not** need Node.js, npm, or Git. It still needs Windows, internet, audio output, and its own Gemini key configuration. The packaged app reads `.env` from Electron's per-user app data directory, rather than the source folder. With the configured product name, this is `%APPDATA%\Silent Assistant\.env`:
+## Window visibility and shortcuts
+
+- Click **Background**, or press `Ctrl+Shift+H` on Windows (`Cmd+Shift+H` on macOS), to hide the window while the app keeps running. Press the same shortcut to restore it. Any capture you already started continues; hiding does not start a recording. Stop recording before hiding if you do not want it to continue. The Background button refuses to hide the app if this shortcut could not register.
+- A hidden window does not force a particular Task Manager category. Windows decides whether an app appears under Apps or Background processes; macOS Activity Monitor still lists running processes. Process visibility and classification are not controlled by the app.
+- Windows: the overlay uses Electron's `skipTaskbar` option to omit its taskbar entry. Verify Alt+Tab behavior on the target Windows version; the app makes no promise about every app-switching or monitoring tool.
+- macOS: the code hides the Dock icon using `app.dock.hide()` when its global shortcut registers successfully. This change has only been tested with mocks on Windows; no macOS package or native verification is included. System audio capture remains Windows-only.
+- `Ctrl+Shift+Space` on Windows (`Cmd+Shift+Space` on macOS) is registered with the operating system through Electron's `globalShortcut`; it toggles compact/expanded views without requiring app focus. This does not guarantee invisibility to browser code, keyboard hooks, accessibility tools, or monitoring software.
+- If the shortcut is already in use, the taskbar/Dock entry stays available for recovery. The overlay's Compact and Quit controls remain available.
+
+References: [Electron global shortcuts](https://www.electronjs.org/docs/latest/api/global-shortcut), [Dock visibility](https://www.electronjs.org/docs/latest/api/dock#dockhide).
+
+A machine using the built installer does **not** need Node.js, npm, or Git. It still needs Windows, internet, audio output, and its own Gemini key configuration. The packaged app reads `.env` from Electron's per-user app data directory, rather than the source folder. The existing directory is explicitly preserved across the rename: `%APPDATA%\Silent Assistant\.env`:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:APPDATA\Silent Assistant" | Out-Null

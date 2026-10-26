@@ -4,9 +4,15 @@ const { GoogleGenAI } = require('@google/genai');
 const dotenv = require('dotenv');
 const path = require('path');
 
+// Keep existing per-user credentials and settings when changing the display name.
+if (app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'Silent Assistant'));
+}
+
 let mainWindow;
 let envFilePath;
 let shortcutAvailable = false;
+let backgroundShortcutAvailable = false;
 let compactOverlay = false;
 
 function protectOverlay() {
@@ -35,7 +41,7 @@ function createWindow() {
     height: 700,
     minWidth: 440,
     minHeight: 300,
-    title: 'Silent Assistant',
+    title: 'Desk Notes',
     resizable: true,
     movable: true,
     frame: false,
@@ -96,7 +102,24 @@ function toggleOverlay() {
   mainWindow.show();
 }
 
+function toggleBackground() {
+  if (!mainWindow) return;
+  if (mainWindow.isVisible()) {
+    mainWindow.hide();
+  } else {
+    reportOverlayProtection();
+    mainWindow.show();
+    mainWindow.focus();
+  }
+}
+
 ipcMain.on('hide-overlay', toggleOverlay);
+ipcMain.handle('background-overlay', () => {
+  // Do not leave a hidden app with no working shortcut to restore it.
+  if (!mainWindow || !backgroundShortcutAvailable) return false;
+  mainWindow.hide();
+  return true;
+});
 ipcMain.on('close-app', () => app.quit());
 ipcMain.handle('check-overlay-protection', reportOverlayProtection);
 
@@ -237,12 +260,15 @@ app.whenReady().then(() => {
 
   createWindow();
   shortcutAvailable = globalShortcut.register('CommandOrControl+Shift+Space', toggleOverlay);
+  backgroundShortcutAvailable = globalShortcut.register('CommandOrControl+Shift+H', toggleBackground);
+  if (process.platform === 'darwin' && shortcutAvailable) app.dock.hide();
   if (!shortcutAvailable) {
     mainWindow.webContents.once('did-finish-load', () => {
       mainWindow.webContents.send('shortcut-unavailable');
     });
     // Keep the window recoverable if another app owns the shortcut.
     mainWindow.setSkipTaskbar(false);
+    if (process.platform === 'darwin') app.dock.show();
   }
 });
 

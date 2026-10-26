@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Silent Assistant</title>
+  <title>Desk Notes</title>
   <style>
     * {
       box-sizing: border-box;
@@ -136,11 +136,12 @@
   <main class="container">
     <header class="titlebar" title="Drag this header to move the window">
       <div class="drag-handle">
-        <h1>Silent Assistant</h1>
+        <h1>Desk Notes</h1>
         <span class="drag-hint">⠿ Drag here to move</span>
       </div>
       <div>
         <button id="hide-button" class="secondary" title="Keep answers visible in a compact overlay (Ctrl+Shift+Space)">Compact</button>
+        <button id="background-button" class="secondary" title="Hide the window; Ctrl/Cmd+Shift+H brings it back. Active recording continues.">Background</button>
         <button id="quit-button" class="secondary" title="Quit application">Quit</button>
       </div>
     </header>
@@ -587,6 +588,15 @@
       if (event.key === 'Enter' && !askButton.disabled && typedQuestion.value.trim()) draftAnswer(typedQuestion.value.trim());
     });
     document.getElementById('hide-button').addEventListener('click', () => ipcRenderer.send('hide-overlay'));
+    document.getElementById('background-button').addEventListener('click', async () => {
+      try {
+        if (!await ipcRenderer.invoke('background-overlay')) {
+          setStatus('Cannot hide: Ctrl/Cmd+Shift+H is already in use. The window stays visible so you can still control recording.', true);
+        }
+      } catch (error) {
+        setStatus(`Could not enter background mode: ${error.message}`, true);
+      }
+    });
     document.getElementById('quit-button').addEventListener('click', () => ipcRenderer.send('close-app'));
   </script>
 </body>

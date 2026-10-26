@@ -4,12 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-async function loadApp(shortcutWorks = true, hasProtectionGetter = true) {
+async function loadApp(shortcutWorks = true, hasProtectionGetter = true, platform = 'win32', packaged = false, backgroundShortcutWorks = shortcutWorks) {
   const handlers = {};
   const events = {};
   let win;
   let toggle;
   let request;
+  const shortcuts = {};
+  const dock = { hidden: false, hide() { this.hidden = true; }, show() { this.hidden = false; } };
+  const appPaths = { appData: path.join(__dirname, 'app-data') };
   class Window {
     constructor(options) {
       win = this;
@@ -26,6 +29,7 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true) {
     on(name, handler) { this.windowEvents[name] = handler; }
     loadFile() {}
     show() { this.visible = true; }
+    focus() { this.focused = true; }
     hide() { this.visible = false; }
     minimize() { this.minimized = true; }
     isVisible() { return this.visible; }
@@ -33,15 +37,19 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true) {
     setSize(width, height) { this.size = [width, height]; }
   }
   const electron = {
-    app: { whenReady: async () => {}, on() {}, quit() {} },
+    app: { isPackaged: packaged, dock, getPath: key => appPaths[key], setPath: (key, value) => { appPaths[key] = value; }, whenReady: async () => {}, on() {}, quit() {} },
     BrowserWindow: Window,
     ipcMain: { handle: (key, fn) => { handlers[key] = fn; }, on: (key, fn) => { events[key] = fn; } },
     session: { defaultSession: { setDisplayMediaRequestHandler() {} } },
-    globalShortcut: { register: (key, fn) => { toggle = fn; return shortcutWorks; }, unregisterAll() {} }
+    globalShortcut: { register: (key, fn) => {
+      shortcuts[key] = fn;
+      if (key.endsWith('+Space')) { toggle = fn; return shortcutWorks; }
+      return backgroundShortcutWorks;
+    }, unregisterAll() {} }
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), {
     __dirname: path.join(__dirname, '..'),
-    process: { env: { GEMINI_API_KEY: 'test-placeholder' }, platform: 'win32' },
+    process: { env: { GEMINI_API_KEY: 'test-placeholder' }, platform },
     console,
     require: name => {
       if (name === 'electron') return electron;
@@ -59,8 +67,44 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true) {
     }
   });
   await Promise.resolve();
-  return { win, handlers, events, toggle, getRequest: () => request };
+  return { win, handlers, events, toggle, dock, appPaths, shortcuts, getRequest: () => request };
 }
+
+test('background mode hides and restores the same window without stopping capture', async () => {
+  const { win, handlers, shortcuts } = await loadApp();
+  win.show();
+  assert.equal(await handlers['background-overlay'](), true);
+  assert.equal(win.visible, false);
+  assert.equal(win.options.webPreferences.backgroundThrottling, false);
+  shortcuts['CommandOrControl+Shift+H']();
+  assert.equal(win.visible, true);
+  assert.equal(win.focused, true);
+  assert.equal(win.protected, true);
+  shortcuts['CommandOrControl+Shift+H']();
+  assert.equal(win.visible, false);
+});
+
+test('background shortcut conflict refuses to hide the window', async () => {
+  const { win, handlers } = await loadApp(true, true, 'win32', false, false);
+  win.show();
+  assert.equal(await handlers['background-overlay'](), false);
+  assert.equal(win.visible, true);
+});
+
+test('packaged branding retains the existing credentials directory', async () => {
+  const { win, appPaths } = await loadApp(true, true, 'win32', true);
+  assert.equal(win.options.title, 'Desk Notes');
+  assert.equal(appPaths.userData, path.join(appPaths.appData, 'Silent Assistant'));
+});
+
+test('macOS hides the Dock icon only when the recovery shortcut is available', async () => {
+  const normal = await loadApp(true, true, 'darwin');
+  assert.equal(normal.dock.hidden, true);
+  const conflict = await loadApp(false, true, 'darwin');
+  assert.equal(conflict.dock.hidden, false);
+  assert.equal(conflict.win.options.skipTaskbar, false);
+  assert.throws(() => normal.handlers['check-capture-ready'](), /Windows only/);
+});
 
 test('compact overlay keeps answers visible and background audio timers active', async () => {
   const { win, toggle, events } = await loadApp();

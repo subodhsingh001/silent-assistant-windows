@@ -1,6 +1,6 @@
 {
   "name": "silent-assistant",
-  "productName": "Silent Assistant",
+  "productName": "Desk Notes",
   "version": "1.0.0",
   "description": "Private Windows overlay for system-audio transcription and meeting notes with Gemini AI",
   "main": "main.js",
@@ -22,10 +22,11 @@
   },
   "build": {
     "appId": "com.silent.assistant",
-    "productName": "Silent Assistant",
+    "productName": "Desk Notes",
+    "directories": { "output": "dist/desk-notes" },
     "files": ["main.js", "gemini-retry.js", "index.html", "package.json"],
     "win": {
-      "executableName": "Silent Assistant",
+      "executableName": "Desk Notes",
       "target": "nsis"
     }
   }
