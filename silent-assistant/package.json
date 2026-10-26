@@ -1,5 +1,6 @@
 {
   "name": "silent-assistant",
+  "productName": "Silent Assistant",
   "version": "1.0.0",
   "description": "Private Windows overlay for system-audio transcription and meeting notes with Gemini AI",
   "main": "main.js",
@@ -21,9 +22,10 @@
   },
   "build": {
     "appId": "com.silent.assistant",
-    "productName": "Meeting Transcription & Notes",
+    "productName": "Silent Assistant",
     "files": ["main.js", "gemini-retry.js", "index.html", "package.json"],
     "win": {
+      "executableName": "Silent Assistant",
       "target": "nsis"
     }
   }

@@ -56,11 +56,15 @@ npm.cmd run dist
 
 The Windows NSIS installer is generated in `silent-assistant/dist/`. Build output is excluded from Git; distribute installers separately, for example through GitHub Releases. `npm.cmd run pack` creates an unpacked app for local inspection instead of an installer.
 
-A machine using the built installer does **not** need Node.js, npm, or Git. It still needs Windows, internet, audio output, and its own Gemini key configuration. The packaged app reads `.env` from Electron's per-user app data directory, rather than the source folder. With the current package name and default Electron configuration, this is `%APPDATA%\silent-assistant\.env`:
+The packaged Windows executable is `Silent Assistant.exe`, with the product name **Silent Assistant**. Launch the packaged executable or installed app to use this name in Task Manager; `npm.cmd start` still launches the Electron development executable. The running app remains visible in process monitors, and Electron may run several child processes. This naming does not disguise the app as a Windows service or guarantee exclusion from screen capture.
+
+After building, double-click `Start Silent Assistant.cmd` in the repository root, or open `silent-assistant\dist\win-unpacked` in File Explorer and double-click `Silent Assistant.exe`. The launcher clears `ELECTRON_RUN_AS_NODE` for the child app, since development tools can set that environment variable and cause Electron to start without a window. A file link in chat may only select or open the file location rather than execute it.
+
+A machine using the built installer does **not** need Node.js, npm, or Git. It still needs Windows, internet, audio output, and its own Gemini key configuration. The packaged app reads `.env` from Electron's per-user app data directory, rather than the source folder. With the configured product name, this is `%APPDATA%\Silent Assistant\.env`:
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:APPDATA\silent-assistant" | Out-Null
-notepad "$env:APPDATA\silent-assistant\.env"
+New-Item -ItemType Directory -Force "$env:APPDATA\Silent Assistant" | Out-Null
+notepad "$env:APPDATA\Silent Assistant\.env"
 ```
 
 Paste the template settings, enter your own key, save, and restart the installed app. The missing-key error also reports the exact path being used. Credentials are not included in the installer.

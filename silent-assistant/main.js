@@ -35,7 +35,7 @@ function createWindow() {
     height: 700,
     minWidth: 440,
     minHeight: 300,
-    title: 'Meeting Transcription & Notes',
+    title: 'Silent Assistant',
     resizable: true,
     movable: true,
     frame: false,
