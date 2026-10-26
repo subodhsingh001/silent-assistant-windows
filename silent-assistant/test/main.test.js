@@ -10,6 +10,9 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true, platfor
   let win;
   let toggle;
   let request;
+  const environment = { GEMINI_API_KEY: 'test-placeholder' };
+  let configuration = {};
+  let audioResult = { transcript: 'What is a binary tree?', question: 'What is a binary tree?', answer: 'A tree whose nodes have at most two children.' };
   const shortcuts = {};
   const dock = { hidden: false, hide() { this.hidden = true; }, show() { this.hidden = false; } };
   const appPaths = { appData: path.join(__dirname, 'app-data') };
@@ -37,7 +40,7 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true, platfor
     setSize(width, height) { this.size = [width, height]; }
   }
   const electron = {
-    app: { isPackaged: packaged, dock, getPath: key => appPaths[key], setPath: (key, value) => { appPaths[key] = value; }, whenReady: async () => {}, on() {}, quit() {} },
+    app: { isPackaged: packaged, dock, getVersion: () => '1.0.5', getPath: key => appPaths[key], setPath: (key, value) => { appPaths[key] = value; }, whenReady: async () => {}, on() {}, quit() {} },
     BrowserWindow: Window,
     ipcMain: { handle: (key, fn) => { handlers[key] = fn; }, on: (key, fn) => { events[key] = fn; } },
     session: { defaultSession: { setDisplayMediaRequestHandler() {} } },
@@ -49,26 +52,66 @@ async function loadApp(shortcutWorks = true, hasProtectionGetter = true, platfor
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), {
     __dirname: path.join(__dirname, '..'),
-    process: { env: { GEMINI_API_KEY: 'test-placeholder' }, platform },
+    process: { env: environment, platform },
     console,
     require: name => {
       if (name === 'electron') return electron;
-      if (name === 'dotenv') return { config: () => ({}) };
+      if (name === 'dotenv') return { config: () => ({ parsed: configuration }) };
       if (name === '@google/genai') return { GoogleGenAI: class {
         constructor() { this.models = { generateContent: async value => {
           request = value;
           return { text: value.config?.responseMimeType === 'application/json'
-            ? JSON.stringify({ transcript: 'What is a binary tree?', question: 'What is a binary tree?', answer: 'A tree whose nodes have at most two children.' })
+            ? JSON.stringify(audioResult)
             : ' Example output ' };
-        } }; }
+        } };
+          const generate = this.models.generateContent;
+          this.models.generateContentStream = async function* (value) {
+            const result = await generate(value);
+            const midpoint = Math.floor(result.text.length / 2);
+            yield { text: result.text.slice(0, midpoint) };
+            yield { text: result.text.slice(midpoint) };
+          };
+        }
       } };
       if (name === './gemini-retry') return require('../gemini-retry');
+      if (name === './streamed-json') return require('../streamed-json');
+      if (name === './answer-policy') return require('../answer-policy');
       return require(name);
     }
   });
   await Promise.resolve();
-  return { win, handlers, events, toggle, dock, appPaths, shortcuts, getRequest: () => request };
+  return { win, handlers, events, toggle, dock, appPaths, shortcuts, environment, getRequest: () => request, setAudioResult: value => { audioResult = value; }, setConfiguration: value => { configuration = value; } };
 }
+
+test('capture rereads a newly configured key after an earlier missing-key error', async () => {
+  const app = await loadApp();
+  app.environment.GEMINI_API_KEY = '';
+  assert.throws(() => app.handlers['check-capture-ready'](), /GEMINI_API_KEY is missing/);
+  app.setConfiguration({ GEMINI_API_KEY: 'local-test-key' });
+  assert.equal(app.handlers['check-capture-ready'](), true);
+  assert.equal(app.environment.GEMINI_API_KEY, 'local-test-key');
+});
+
+test('a configured environment key takes precedence over the env file', async () => {
+  const app = await loadApp();
+  app.setConfiguration({ GEMINI_API_KEY: 'different-test-key' });
+  assert.equal(app.handlers['check-capture-ready'](), true);
+  assert.equal(app.environment.GEMINI_API_KEY, 'test-placeholder');
+});
+
+test('live output suppresses invented questions without a transcript and answers without a question', async () => {
+  const { handlers, setAudioResult } = await loadApp();
+  const event = { sender: { isDestroyed: () => false, send() {} } };
+  const audio = { data: 'YXVkaW8=', mimeType: 'audio/webm' };
+  setAudioResult({ transcript: '', question: 'Invented question?', answer: 'Invented answer' });
+  const silent = await handlers['analyze-audio'](event, audio);
+  assert.equal(silent.question, '');
+  assert.equal(silent.answer, '');
+  setAudioResult({ transcript: 'Hello there.', question: '', answer: 'Unrelated answer' });
+  const speech = await handlers['analyze-audio'](event, audio);
+  assert.equal(speech.transcript, 'Hello there.');
+  assert.equal(speech.answer, '');
+});
 
 test('background mode hides and restores the same window without stopping capture', async () => {
   const { win, handlers, shortcuts } = await loadApp();
@@ -97,12 +140,12 @@ test('packaged branding retains the existing credentials directory', async () =>
   assert.equal(appPaths.userData, path.join(appPaths.appData, 'Silent Assistant'));
 });
 
-test('macOS hides the Dock icon only when the recovery shortcut is available', async () => {
+test('macOS keeps the Dock hidden even when shortcuts conflict', async () => {
   const normal = await loadApp(true, true, 'darwin');
   assert.equal(normal.dock.hidden, true);
   const conflict = await loadApp(false, true, 'darwin');
-  assert.equal(conflict.dock.hidden, false);
-  assert.equal(conflict.win.options.skipTaskbar, false);
+  assert.equal(conflict.dock.hidden, true);
+  assert.equal(conflict.win.options.skipTaskbar, true);
   assert.throws(() => normal.handlers['check-capture-ready'](), /Windows only/);
 });
 
@@ -121,12 +164,15 @@ test('compact overlay keeps answers visible and background audio timers active',
   assert.deepEqual(win.size, [620, 700]);
 });
 
-test('shortcut conflict preserves taskbar access; compact button still works', async () => {
+test('shortcut conflict keeps the taskbar hidden; compact button still works', async () => {
   const { win, events } = await loadApp(false);
-  assert.equal(win.options.skipTaskbar, false);
+  assert.equal(win.options.skipTaskbar, true);
   events['hide-overlay']();
   assert.equal(win.visible, true);
   assert.deepEqual(win.size, [500, 440]);
+  win.options.skipTaskbar = false;
+  win.windowEvents.show();
+  assert.equal(win.options.skipTaskbar, true);
 });
 
 test('protection can be checked and is reapplied after restore and layout changes', async () => {
@@ -180,7 +226,69 @@ test('live analysis returns transcript and answer together with English instruct
   const result = await handlers['analyze-audio'](event, { data: 'YXVkaW8=', mimeType: 'audio/webm', context: 'Earlier question fragment' });
   assert.equal(result.answer, 'A tree whose nodes have at most two children.');
   assert.equal(result.transcript, 'What is a binary tree?');
-  assert.match(getRequest().contents[0].parts[0].text, /All three output fields must be in English/);
+  assert.match(getRequest().contents[0].parts[0].text, /All output fields must be in English/);
   assert.match(getRequest().contents[0].parts[0].text, /Earlier question fragment/);
   assert.equal(getRequest().model, 'gemini-3.5-flash-lite');
+});
+
+test('live requests stream partial answers and request programming examples with bounded latency', async () => {
+  const { handlers, getRequest } = await loadApp();
+  const notifications = [];
+  const event = { sender: { isDestroyed: () => false, send: (name, body) => notifications.push({name, body}) } };
+  const result = await handlers['analyze-audio'](event, {data:'YXVkaW8=',mimeType:'audio/webm',requestId:7});
+  assert.ok(result.answer);
+  assert.ok(notifications.some(item => item.name === 'live-answer-partial' && item.body.requestId === 7 && item.body.answer));
+  assert.equal(getRequest().config.httpOptions.timeout, 20000);
+  assert.equal(getRequest().config.thinkingConfig.thinkingLevel, 'minimal');
+  assert.ok(getRequest().config.responseSchema.required.includes('example'));
+});
+
+test('programming examples are included in the displayed answer', async () => {
+  const { handlers, setAudioResult } = await loadApp();
+  setAudioResult({transcript:'Explain TypeScript.',question:'Explain TypeScript.',answer:'TypeScript adds static types.',example:'const n: number = 1; console.log(n); // 1'});
+  const result = await handlers['analyze-audio']({sender:{isDestroyed:()=>false,send(){}}},{data:'YXVkaW8=',mimeType:'audio/webm'});
+  assert.match(result.answer, /Example:/);
+  assert.match(result.answer, /const n: number/);
+});
+
+test('skip and wait markers remain exact and are never decorated with examples', async () => {
+  const { handlers, setAudioResult, getRequest } = await loadApp();
+  const event = {sender:{isDestroyed:()=>false,send(){}}};
+  for (const marker of ['[SKIP]', '[WAIT]']) {
+    setAudioResult({transcript:'What is JavaScript',question:'',answer:marker,example:'must not be appended'});
+    const result = await handlers['analyze-audio'](event,{data:'YXVkaW8=',mimeType:'audio/webm',alreadyAnswered:['What is JavaScript?']});
+    assert.equal(result.answer, marker);
+    assert.match(getRequest().contents[0].parts[0].text, /already_answered/);
+    assert.match(getRequest().contents[0].parts[0].text, /What is JavaScript\?/);
+  }
+});
+
+test('audio batches keep independent audio parts in chronological order', async () => {
+  const { handlers, getRequest } = await loadApp();
+  const event = {sender:{isDestroyed:()=>false,send(){}}};
+  await handlers['analyze-audio'](event,{chunks:['Zmlyc3Q=','c2Vjb25k'],mimeType:'audio/webm'});
+  const audioParts = getRequest().contents[0].parts.filter(part=>part.inlineData);
+  assert.deepEqual(Array.from(audioParts, part=>part.inlineData.data), ['Zmlyc3Q=','c2Vjb25k']);
+  await handlers['transcribe-audio'](event,{chunks:['Zmlyc3Q=','c2Vjb25k'],mimeType:'audio/webm'});
+  assert.equal(getRequest().contents[0].parts.filter(part=>part.inlineData).length, 2);
+});
+
+test('malformed and oversized batches are rejected before requesting Gemini', async () => {
+  const { handlers, getRequest } = await loadApp();
+  const event = {sender:{isDestroyed:()=>false,send(){}}};
+  for (const chunks of [[],['valid',null],Array(5).fill('valid'),['x'.repeat(8_000_001)]]) {
+    await assert.rejects(handlers['analyze-audio'](event,{chunks,mimeType:'audio/webm'}), /empty|invalid|too large/);
+    assert.equal(getRequest(), undefined);
+  }
+});
+
+test('live timeout overrides are validated instead of accepting an unbounded timeout', async () => {
+  const { handlers, environment, getRequest } = await loadApp();
+  const event = {sender:{isDestroyed:()=>false,send(){}}};
+  environment.GEMINI_LIVE_TIMEOUT_MS = '22000';
+  await handlers['analyze-audio'](event,{data:'YXVkaW8=',mimeType:'audio/webm'});
+  assert.equal(getRequest().config.httpOptions.timeout, 22000);
+  environment.GEMINI_LIVE_TIMEOUT_MS = '0';
+  await handlers['analyze-audio'](event,{data:'YXVkaW8=',mimeType:'audio/webm'});
+  assert.equal(getRequest().config.httpOptions.timeout, 20000);
 });

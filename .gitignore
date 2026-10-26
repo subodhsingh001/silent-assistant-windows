@@ -11,6 +11,7 @@ coverage/
 
 # Captures, browser profiles, and temporary audio
 /artifacts/
+/artifacts.zip
 temp_chunk.*
 *.log
 

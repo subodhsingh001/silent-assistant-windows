@@ -136,7 +136,7 @@
   <main class="container">
     <header class="titlebar" title="Drag this header to move the window">
       <div class="drag-handle">
-        <h1>Desk Notes</h1>
+        <h1 id="app-name">Desk Notes</h1>
         <span class="drag-hint">⠿ Drag here to move</span>
       </div>
       <div>
@@ -162,11 +162,12 @@
       <label><input id="auto-answer" type="checkbox" checked> Auto answer in English</label>
     </div>
     <div class="audio-controls"><meter id="audio-level" min="0" max="1" value="0"></meter><span id="audio-status">Audio is stopped.</span></div>
+    <p id="input-help" class="overlay-help">System audio hears all computer playback. Pause other videos, tabs, notifications, and music when checking the transcript. It does not hear your microphone.</p>
     <div class="controls">
       <button id="start-button">Start transcription</button>
       <button id="stop-button" class="secondary" disabled>Stop</button>
       <button id="notes-button" class="secondary" disabled>Create meeting notes</button>
-      <button id="answer-button" class="secondary" disabled>Draft answer</button>
+      <button id="answer-button" class="secondary" disabled>Answer detected question</button>
       <button id="clear-button" class="secondary">Clear</button>
       <button id="retry-button" class="secondary" hidden>Retry failed audio</button>
     </div>
@@ -181,6 +182,10 @@
         <input id="typed-question" type="text" placeholder="Type a question in any language" aria-label="Question">
         <button id="ask-button">Answer in English</button>
       </div>
+    </section>
+    <section class="details">
+      <h2>Answered questions</h2>
+      <div id="answer-history" class="text-panel"><span class="empty">Completed questions and answers stay here.</span></div>
     </section>
     <section class="details">
       <h2>English transcript</h2>
@@ -218,6 +223,7 @@
     const retryButton = document.getElementById('retry-button');
     const answerButton = document.getElementById('answer-button');
     const answerBox = document.getElementById('answer');
+    const answerHistory = document.getElementById('answer-history');
     const answerStatus = document.getElementById('answer-status');
     const questionBox = document.getElementById('question');
     const autoAnswer = document.getElementById('auto-answer');
@@ -234,6 +240,9 @@
     let recorder;
     let transcriptText = '';
     let transcriptionQueue = Promise.resolve();
+    const waitingChunks = [];
+    let audioWorker = null;
+    let fallbackAnswerPromise = Promise.resolve();
     let captureStartedAt = 0;
     let stopPromise;
     let chunkTimer;
@@ -248,17 +257,80 @@
     let speechSamples = 0;
     let lastSignalAt = 0;
     let answerRevision = 0;
+    let manualAnswerRevision = 0;
+    let partialAnswerStartedId = 0;
+    let latestDetectedQuestion = '';
+    let lastCompletedAnswer = null;
+    let answeredQuestions = [];
+    let requestSequence = 0;
+    let activeAudioRequestId = 0;
+    let activeAudioRevision = 0;
+    let activeTextRequestId = 0;
+    let activeTextRevision = 0;
+    let chunkStartedAt = 0;
+
+    function speechPauseReady(now, startedAt, lastSpeechAt, sampleCount) {
+      return sampleCount >= 3 && now - startedAt >= 1800 && now - lastSpeechAt >= 1100;
+    }
+
+    function questionKey(question) {
+      return question.toLowerCase()
+        .replace(/^(?:(?:uh|um|so|well|please|can you tell me|could you tell me)[,\s]+)+/, '')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\b(\w+)(?:\s+\1\b)+/g, '$1').trim();
+    }
+
+    function alreadyAnswered(question) {
+      const key = questionKey(question);
+      return Boolean(key) && answeredQuestions.some(previous => questionKey(previous) === key);
+    }
+
+    function controlPrefix(answer) {
+      return ['[SKIP]', '[WAIT]'].some(marker => marker.startsWith(answer.trim()));
+    }
+
+    function handleControlAnswer(answer) {
+      if (answer !== '[SKIP]' && answer !== '[WAIT]') return false;
+      questionBox.textContent = lastCompletedAnswer?.question || '';
+      answerBox.textContent = lastCompletedAnswer?.answer || 'Waiting for a new, complete question.';
+      answerStatus.textContent = answer === '[SKIP]' ? 'Repeated question skipped. Listening.' : 'Waiting for the question to finish.';
+      return true;
+    }
 
     ipcRenderer.on('gemini-retry', (event, message) => {
       setStatus(message);
       answerStatus.textContent = message;
+    });
+    ipcRenderer.on('app-version', (_event, version) => {
+      document.getElementById('app-name').textContent = `Desk Notes ${version}`;
+    });
+    ipcRenderer.on('live-answer-partial', (_event, partial) => {
+      if (partial.requestId !== activeAudioRequestId || activeAudioRevision !== manualAnswerRevision || !autoAnswer.checked) return;
+      if (partial.reset && lastCompletedAnswer) {
+        questionBox.textContent = lastCompletedAnswer.question;
+        answerBox.textContent = lastCompletedAnswer.answer;
+      } else if (partial.transcript?.trim() && partial.question?.trim() && partial.answer && !controlPrefix(partial.answer) && !alreadyAnswered(partial.question)) {
+        if (partialAnswerStartedId !== partial.requestId) {
+          partialAnswerStartedId = partial.requestId;
+          answerRevision++; // A newer detected question supersedes an older text answer.
+        }
+        questionBox.textContent = partial.question;
+        answerBox.textContent = partial.answer + (partial.example ? `\n\nExample:\n${partial.example}` : '');
+        answerStatus.textContent = 'Answer arriving now...';
+      }
+    });
+    ipcRenderer.on('answer-text-partial', (_event, partial) => {
+      if (partial.requestId !== activeTextRequestId || activeTextRevision !== answerRevision || !partial.text || controlPrefix(partial.text) || alreadyAnswered(latestDetectedQuestion)) return;
+      questionBox.textContent = latestDetectedQuestion;
+      answerBox.textContent = partial.text;
+      answerStatus.textContent = 'Answer arriving now...';
     });
     ipcRenderer.on('overlay-layout', (event, compact) => {
       document.body.classList.toggle('compact', compact);
       document.getElementById('hide-button').textContent = compact ? 'Expand' : 'Compact';
     });
     ipcRenderer.on('shortcut-unavailable', () => {
-      document.getElementById('overlay-help').textContent = 'Ctrl+Shift+Space is already in use. Use Compact / Expand on the overlay. The taskbar icon remains available. Check your screen-sharing preview for capture protection.';
+      document.getElementById('overlay-help').textContent = 'Ctrl+Shift+Space is already in use, possibly by an older copy. Use Compact / Expand on this overlay. The taskbar icon remains hidden. Background mode requires a working Ctrl/Cmd+Shift+H shortcut.';
     });
 
     function setStatus(message, isError = false) {
@@ -277,7 +349,6 @@
       transcriptText += `${transcriptText ? '\n' : ''}[${timestamp}] ${text}`;
       transcriptBox.scrollTop = transcriptBox.scrollHeight;
       notesButton.disabled = false;
-      answerButton.disabled = false;
     }
 
     async function blobToBase64(blob) {
@@ -289,27 +360,76 @@
       return btoa(binary);
     }
 
-    async function transcribeChunk(chunk) {
-      const data = await blobToBase64(chunk.blob);
+    function explicitQuestion(text) {
+      // A question mark in the actual new transcript is enough to request an answer,
+      // even if the audio model omitted its separate question field.
+      const sentences = text.trim().split(/(?<=[.!?])\s+/);
+      return sentences.filter(sentence => sentence.endsWith('?')).pop() || '';
+    }
+
+    function showCompletedAnswer(question, answer, capturedAt) {
+      if (handleControlAnswer(answer) || alreadyAnswered(question)) return;
+      answeredQuestions.push(question);
+      answerRevision++;
+      latestDetectedQuestion = question;
+      lastCompletedAnswer = { question, answer, capturedAt };
+      questionBox.textContent = question;
+      answerBox.textContent = answer;
+      answerStatus.textContent = `Answer ready for ${capturedAt}. It stays visible while newer audio is processed.`;
+      const empty = answerHistory.querySelector('.empty');
+      if (empty) empty.remove();
+      const item = document.createElement('p');
+      item.textContent = `[${capturedAt}] ${question}\n${answer}`;
+      answerHistory.appendChild(item);
+      answerHistory.scrollTop = answerHistory.scrollHeight;
+    }
+
+    function transcribeChunk(chunk) {
+      return transcribeChunks([chunk]);
+    }
+
+    async function transcribeChunks(chunks) {
+      const data = await Promise.all(chunks.map(chunk => blobToBase64(chunk.blob)));
+      const chunk = chunks[0];
       const wantsAnswer = autoAnswer.checked;
-      const revision = answerRevision;
-      answerStatus.textContent = wantsAnswer ? 'Listening to captured speech and preparing an English answer...' : 'Automatic answers are off.';
+      const revision = manualAnswerRevision;
+      const requestId = ++requestSequence;
+      activeAudioRequestId = requestId;
+      activeAudioRevision = revision;
+      const timestamp = seconds => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+      const capturedAt = chunks.length === 1 ? timestamp(chunk.elapsedSeconds)
+        : `${timestamp(chunk.elapsedSeconds)}–${timestamp(chunks[chunks.length - 1].elapsedSeconds)}`;
+      answerStatus.textContent = wantsAnswer
+        ? `Processing new speech at ${capturedAt}.${lastCompletedAnswer ? ` Last completed answer (${lastCompletedAnswer.capturedAt}) remains below.` : ' Waiting for the first answer.'}`
+        : 'Automatic answers are off.';
       const result = await ipcRenderer.invoke(wantsAnswer ? 'analyze-audio' : 'transcribe-audio', {
-        data,
+        ...(data.length === 1 ? { data: data[0] } : { chunks: data }),
+        requestId,
         mimeType: 'audio/webm',
-        context: transcriptText.slice(-12000)
+        alreadyAnswered: answeredQuestions.slice(),
+        context: transcriptText.slice(-2000)
       });
       const text = wantsAnswer ? result.transcript : result;
       if (text) appendTranscript(text, chunk.elapsedSeconds);
-      if (wantsAnswer && revision === answerRevision) {
-        if (result.answer) {
-          questionBox.textContent = result.question;
-          answerBox.textContent = result.answer;
-          answerStatus.textContent = 'English answer ready.';
+      if (wantsAnswer && revision === manualAnswerRevision) {
+        if (handleControlAnswer(result.answer?.trim())) return;
+        const detectedQuestion = text?.trim() ? result.question?.trim() || explicitQuestion(text) : '';
+        if (detectedQuestion) {
+          if (alreadyAnswered(detectedQuestion)) { handleControlAnswer('[SKIP]'); return; }
+          answerRevision++;
+          latestDetectedQuestion = detectedQuestion;
+          answerButton.disabled = false;
+          if (result.question?.trim() && result.answer?.trim()) {
+            showCompletedAnswer(detectedQuestion, result.answer, capturedAt);
+          } else {
+            // Recover clear transcribed questions even when structured audio analysis
+            // supplies only a transcript, with an exact text-only answer request.
+            fallbackAnswerPromise = draftAnswer(detectedQuestion, capturedAt, true);
+          }
         } else {
           answerStatus.textContent = text
-            ? 'Speech received. Waiting for a complete question; the previous answer stays visible.'
-            : 'No intelligible speech in this audio. Check the audio source and level meter.';
+            ? `No new question in speech at ${capturedAt}. The last completed answer stays visible.`
+            : 'No intelligible speech in this segment. The last completed answer stays visible.';
         }
       }
     }
@@ -321,19 +441,59 @@
 
     function queueChunk(chunk) {
       pendingChunks++;
-      transcriptionQueue = transcriptionQueue.then(async () => {
+      waitingChunks.push(chunk);
+      setStatus(`Captured speech. ${pendingChunks} audio segment(s) waiting or processing.`);
+      startAudioWorker();
+    }
+
+    function startAudioWorker() {
+      if (audioWorker) return;
+      // Starting in a microtask also coalesces chunks queued together for retry.
+      audioWorker = Promise.resolve().then(drainAudio).finally(() => {
+        audioWorker = null;
+        if (waitingChunks.length) startAudioWorker();
+      });
+      transcriptionQueue = audioWorker;
+    }
+
+    async function waitForTranscription() {
+      while (audioWorker || waitingChunks.length) {
+        if (!audioWorker) startAudioWorker();
+        await audioWorker;
+      }
+    }
+
+    async function drainAudio() {
+      while (waitingChunks.length) {
+        const batch = [];
+        let bytes = 0;
+        // Keep independent WebM containers as separate audio parts. Bound both
+        // count and raw bytes so base64 stays below the main process payload cap.
+        while (waitingChunks.length && batch.length < 4) {
+          const next = waitingChunks[0];
+          if (batch.length && bytes + next.blob.size > 4_000_000) break;
+          batch.push(waitingChunks.shift());
+          bytes += next.blob.size;
+        }
         try {
-          await transcribeChunk(chunk);
-          setStatus(`Audio processed.${failedChunks.length ? ` ${failedChunks.length} failed chunk(s) saved for retry.` : ''}`);
+          await transcribeChunks(batch);
+          setStatus(`Processed ${batch.length} audio segment(s) in one request.${failedChunks.length ? ` ${failedChunks.length} failed chunk(s) saved for retry.` : ''}`);
         } catch (error) {
-          failedChunks.push(chunk);
+          failedChunks.push(...batch);
           updateFailedChunks();
           setStatus(`${error.message} Audio kept in memory; use Retry failed audio.`, true);
           answerStatus.textContent = `No new answer: ${error.message} The audio is saved for retry.`;
+          if (!lastCompletedAnswer) {
+            questionBox.textContent = '';
+            answerBox.textContent = 'No answer received for this speech. Use Retry failed audio.';
+          } else {
+            questionBox.textContent = lastCompletedAnswer.question;
+            answerBox.textContent = lastCompletedAnswer.answer;
+          }
         } finally {
-          pendingChunks--;
+          pendingChunks -= batch.length;
         }
-      });
+      }
     }
 
     async function retryFailedChunks() {
@@ -343,7 +503,7 @@
       failedChunks = [];
       updateFailedChunks();
       chunks.forEach(queueChunk);
-      await transcriptionQueue;
+      await waitForTranscription();
       retryingFailed = false;
       retryButton.disabled = false;
     }
@@ -357,19 +517,21 @@
       );
       const chunks = [];
       speechSamples = 0;
+      chunkStartedAt = Date.now();
       const elapsedSeconds = Math.floor((Date.now() - captureStartedAt) / 1000);
       chunkRecorder.addEventListener('dataavailable', event => {
         if (event.data.size) chunks.push(event.data);
       });
       chunkRecorder.addEventListener('stop', () => {
-        if (chunks.length && speechSamples >= 2) {
+        clearTimeout(chunkTimer);
+        if (chunks.length && speechSamples >= 3) {
           const audioChunk = new Blob(chunks, { type: 'audio/webm' });
           queueChunk({ blob: audioChunk, elapsedSeconds });
         } else if (!captureStopping) {
           setStatus('No speech-level audio detected. Check the meter and selected input.');
         }
         if (!captureStopping && captureStream) {
-          if (pendingChunks + failedChunks.length >= 30) {
+          if (pendingChunks + failedChunks.length >= 8) {
             stopCapture();
             setStatus('Capture paused: too much audio is waiting for Gemini. Retry the saved audio before starting again.', true);
           } else recordNextChunk();
@@ -386,7 +548,7 @@
         if (recorder === chunkRecorder && chunkRecorder.state !== 'inactive') {
           chunkRecorder.stop();
         }
-      }, 6000);
+      }, 8000);
     }
 
     async function prepareAudio() {
@@ -417,9 +579,12 @@
         const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
         audioLevel.value = Math.min(1, rms * 8);
         if (rms > 0.006) { speechSamples++; lastSignalAt = Date.now(); }
+        if (recorder?.state === 'recording' && speechPauseReady(Date.now(), chunkStartedAt, lastSignalAt, speechSamples)) {
+          recorder.stop();
+        }
         audioStatus.textContent = Date.now() - lastSignalAt > 4000
           ? (mode === 'system' ? 'No Teams audio detected. Play remote speech; your own microphone is not included.' : 'No audio detected. Check microphone permission and input device.')
-          : 'Audio input active. Questions are processed in 6-second chunks.';
+          : 'Audio input active. Speech is sent after a short pause (up to 8 seconds per segment).';
       }, 100);
       return destination.stream;
     }
@@ -498,7 +663,7 @@
         activeRecorder.stop();
       }).then(async () => {
         releaseAudio();
-        await transcriptionQueue;
+        await waitForTranscription();
         activeStream?.getTracks().forEach(track => track.stop());
         recorder = null;
         captureStream = null;
@@ -532,27 +697,41 @@
       }
     }
 
-    async function draftAnswer(question = '') {
-      const input = question || transcriptText;
-      if (!input.trim()) { answerStatus.textContent = 'Type a question or capture some speech first.'; return; }
+    async function draftAnswer(question = '', capturedAt = 'typed/retry', fromAudio = false) {
+      const input = question || latestDetectedQuestion;
+      if (!input.trim()) { answerStatus.textContent = 'Type a question or capture a complete question first.'; return; }
+      if (alreadyAnswered(input)) { handleControlAnswer('[SKIP]'); return; }
+      if (!fromAudio) manualAnswerRevision++;
       const revision = ++answerRevision;
+      const requestId = ++requestSequence;
+      activeTextRequestId = requestId;
+      activeTextRevision = revision;
+      latestDetectedQuestion = input;
       answerButton.disabled = true;
       askButton.disabled = true;
-      questionBox.textContent = question || 'Latest transcribed question';
-      answerStatus.textContent = 'Preparing an English answer...';
+      if (!lastCompletedAnswer) questionBox.textContent = input;
+      if (!lastCompletedAnswer) answerBox.textContent = 'Waiting for an answer to this question...';
+      answerStatus.textContent = `Preparing an answer to: ${input}${lastCompletedAnswer ? ' (last completed Q&A remains visible below)' : ''}`;
       setStatus('Drafting an answer to the latest question...');
       try {
-        const answer = await ipcRenderer.invoke('draft-answer', input.slice(-12000));
+        const answer = await ipcRenderer.invoke('draft-answer', input.slice(-12000), requestId, answeredQuestions.slice());
         if (revision !== answerRevision) return;
-        answerBox.textContent = answer;
-        answerStatus.textContent = 'English answer ready.';
+        if (handleControlAnswer(answer.trim())) return;
+        showCompletedAnswer(input, answer, capturedAt);
         setStatus('Suggested answer is ready.');
       } catch (error) {
+        if (revision !== answerRevision) return;
         answerStatus.textContent = `Could not answer: ${error.message || error}`;
+        if (lastCompletedAnswer) {
+          questionBox.textContent = lastCompletedAnswer.question;
+          answerBox.textContent = lastCompletedAnswer.answer;
+        }
         setStatus(error.message || 'Could not draft an answer.', true);
       } finally {
-        answerButton.disabled = !transcriptText;
-        askButton.disabled = false;
+        if (requestId === activeTextRequestId) {
+          answerButton.disabled = !latestDetectedQuestion;
+          askButton.disabled = false;
+        }
       }
     }
 
@@ -562,12 +741,17 @@
         return;
       }
       transcriptText = '';
+      latestDetectedQuestion = '';
+      lastCompletedAnswer = null;
+      answeredQuestions = [];
       answerRevision++;
+      manualAnswerRevision++;
       failedChunks = [];
       updateFailedChunks();
       transcriptBox.innerHTML = '<span class="empty">Transcript will appear here.</span>';
       notesBox.innerHTML = '<span class="empty">Create notes from the transcript when ready.</span>';
       answerBox.innerHTML = '<span class="empty">The latest answer will appear here automatically.</span>';
+      answerHistory.innerHTML = '<span class="empty">Completed questions and answers stay here.</span>';
       questionBox.textContent = '';
       answerStatus.textContent = 'Listening will automatically answer complete questions.';
       answerButton.disabled = true;
@@ -576,6 +760,13 @@
     }
 
     startButton.addEventListener('click', startCapture);
+    audioSource.addEventListener('change', () => {
+      document.getElementById('input-help').textContent = audioSource.value === 'system'
+        ? 'System audio hears all computer playback. Pause other videos, tabs, notifications, and music when checking the transcript. It does not hear your microphone.'
+        : audioSource.value === 'microphone'
+        ? 'Microphone mode hears your selected Windows microphone. Use headphones to reduce speaker echo.'
+        : 'Both inputs are mixed together. Use headphones to reduce duplicated speech and speaker echo.';
+    });
     stopButton.addEventListener('click', stopCapture);
     notesButton.addEventListener('click', createNotes);
     clearButton.addEventListener('click', clearContent);
