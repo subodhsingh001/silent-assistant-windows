@@ -1,0 +1,30 @@
+{
+  "name": "silent-assistant",
+  "version": "1.0.0",
+  "description": "Private Windows overlay for system-audio transcription and meeting notes with Gemini AI",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "dependencies": {
+    "@google/genai": "^2.30.0",
+    "dotenv": "^16.4.5",
+    "axios": "^1.6.0"
+  },
+
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.silent.assistant",
+    "productName": "Meeting Transcription & Notes",
+    "files": ["main.js", "gemini-retry.js", "index.html", "package.json"],
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

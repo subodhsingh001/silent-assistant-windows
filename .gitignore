@@ -1,0 +1,21 @@
+# Dependencies and generated builds
+node_modules/
+dist/
+out/
+coverage/
+
+# Local credentials (keep the template)
+.env
+.env.*
+!.env.example
+
+# Captures, browser profiles, and temporary audio
+/artifacts/
+temp_chunk.*
+*.log
+
+# Machine-specific editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

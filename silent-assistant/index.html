@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meeting Transcription &amp; Notes</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      padding: 10px;
+      background: #e5eaf1;
+      color: #1c2430;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 16px;
+      background: #ffffff;
+      border: 1px solid #dce2ea;
+      border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(25, 38, 55, 0.08);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+    }
+    .disclosure {
+      margin: 0 0 18px;
+      color: #4b5868;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    button {
+      padding: 10px 14px;
+      border: 0;
+      border-radius: 6px;
+      background: #175cd3;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button.secondary {
+      background: #e8edf4;
+      color: #253246;
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    #status {
+      min-height: 22px;
+      margin: 0 0 16px;
+      color: #4b5868;
+      font-size: 13px;
+    }
+    #status.error {
+      color: #b42318;
+    }
+    section {
+      margin-top: 20px;
+    }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 17px;
+    }
+    .text-panel {
+      min-height: 120px;
+      max-height: 260px;
+      overflow-y: auto;
+      padding: 12px;
+      border: 1px solid #dce2ea;
+      border-radius: 6px;
+      background: #fbfcfe;
+      color: #253246;
+      font-size: 14px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .empty {
+      color: #788596;
+      font-style: italic;
+    }
+    .titlebar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      -webkit-app-region: drag;
+      app-region: drag;
+      user-select: none;
+      background: #ffffff;
+      padding: 10px 0;
+      min-height: 56px;
+      margin-bottom: 12px;
+    }
+    .titlebar h1 { font-size: 18px; margin: 0; }
+    .drag-handle { flex: 1; min-width: 0; }
+    .drag-hint { display: block; margin-top: 3px; font-size: 12px; color: #4b5868; }
+    .titlebar button { -webkit-app-region: no-drag; app-region: no-drag; padding: 6px 10px; }
+    .overlay-help { font-size: 12px; color: #4b5868; line-height: 1.5; }
+    .privacy-status { margin: 0 0 8px; font-size: 12px; line-height: 1.4; color: #4b5868; }
+    .privacy-status.error { color: #b42318; }
+    select, input[type="text"] { padding: 8px; border: 1px solid #dce2ea; border-radius: 6px; max-width: 100%; }
+    .audio-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; font-size: 13px; }
+    #audio-status, #answer-status { font-size: 13px; line-height: 1.5; }
+    #audio-level { width: 90px; }
+    #question { font-weight: 600; margin-bottom: 8px; white-space: pre-wrap; }
+    #answer { min-height: 140px; }
+    .compact .disclosure, .compact .overlay-help, .compact .details, .compact #notes-button,
+    .compact #clear-button, .compact .manual-question, .compact .input-options { display: none; }
+    .compact .container { padding: 10px; height: calc(100vh - 20px); display: flex; flex-direction: column; }
+    .compact section:not(.details) { margin-top: 8px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .compact #answer { max-height: none; min-height: 40px; flex: 1; }
+    .compact #question { max-height: 42px; overflow-y: auto; }
+    .compact #answer-status { margin: 4px 0; max-height: 42px; overflow-y: auto; }
+    .compact #status { margin: 0 0 4px; font-size: 12px; }
+    .compact button { padding: 6px 9px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header class="titlebar" title="Drag this header to move the window">
+      <div class="drag-handle">
+        <h1>Meeting Transcription &amp; Notes</h1>
+        <span class="drag-hint">⠿ Drag here to move</span>
+      </div>
+      <div>
+        <button id="hide-button" class="secondary" title="Keep answers visible in a compact overlay (Ctrl+Shift+Space)">Compact</button>
+        <button id="quit-button" class="secondary" title="Quit application">Quit</button>
+      </div>
+    </header>
+    <p id="privacy-status" class="privacy-status" role="status">Checking Windows capture exclusion. Screen sharing has not been verified.</p>
+    <button id="privacy-check-button" class="secondary" title="Check the Windows setting; this does not test Teams or Chrome sharing">Check capture protection</button>
+    <p id="overlay-help" class="overlay-help">Drag the header to move. Ctrl+Shift+Space switches between compact and expanded views; answers stay visible above Teams. Hidden from the taskbar with Windows capture protection enabled. Check your sharing preview before relying on capture protection.</p>
+    <p class="disclosure">
+      On Windows, Start captures audio playing through your system (including Teams and other apps).
+      Audio chunks are sent to Google Gemini for transcription. Get consent before recording.
+      Client / Teams audio is the default. Your microphone stays off; answers focus on the other participant. Other sounds playing on this computer can also be heard. Responses are in English.
+    </p>
+    <div class="audio-controls input-options">
+      <label>Listen to <select id="audio-source">
+        <option value="system" selected>Client / Teams audio (microphone off)</option>
+        <option value="microphone">Microphone</option>
+        <option value="both">Teams + microphone</option>
+      </select></label>
+      <label><input id="auto-answer" type="checkbox" checked> Auto answer in English</label>
+    </div>
+    <div class="audio-controls"><meter id="audio-level" min="0" max="1" value="0"></meter><span id="audio-status">Audio is stopped.</span></div>
+    <div class="controls">
+      <button id="start-button">Start transcription</button>
+      <button id="stop-button" class="secondary" disabled>Stop</button>
+      <button id="notes-button" class="secondary" disabled>Create meeting notes</button>
+      <button id="answer-button" class="secondary" disabled>Draft answer</button>
+      <button id="clear-button" class="secondary">Clear</button>
+      <button id="retry-button" class="secondary" hidden>Retry failed audio</button>
+    </div>
+    <p id="status" role="status">Ready. Start capture when you have permission to record this meeting.</p>
+    <section>
+      <h2>English answer</h2>
+      <p id="answer-status" role="status">Listening will automatically answer complete questions.</p>
+      <div id="question"></div>
+      <div id="answer" class="text-panel"><span class="empty">The latest answer will appear here automatically.</span></div>
+      <div class="manual-question">
+        <p>Test without audio, or type a question you missed:</p>
+        <input id="typed-question" type="text" placeholder="Type a question in any language" aria-label="Question">
+        <button id="ask-button">Answer in English</button>
+      </div>
+    </section>
+    <section class="details">
+      <h2>English transcript</h2>
+      <div id="transcript" class="text-panel"><span class="empty">Transcript will appear here.</span></div>
+    </section>
+    <section class="details">
+      <h2>Meeting notes</h2>
+      <div id="notes" class="text-panel"><span class="empty">Create notes from the transcript when ready.</span></div>
+    </section>
+  </main>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    function displayProtectionStatus(enabled) {
+      const privacyStatus = document.getElementById('privacy-status');
+      privacyStatus.classList.toggle('error', enabled !== true && enabled !== null);
+      privacyStatus.textContent = enabled === null
+        ? 'Windows capture exclusion requested. This Electron version cannot query its status. Verify Teams/Chrome sharing from another device.'
+        : enabled === true
+        ? 'Windows capture exclusion is enabled. Verify Teams/Chrome sharing from another device.'
+        : 'Capture exclusion could not be confirmed. The overlay may appear in screen shares.';
+    }
+    ipcRenderer.on('overlay-protection', (_event, enabled) => displayProtectionStatus(enabled));
+    document.getElementById('privacy-check-button').addEventListener('click', async () => {
+      try {
+        displayProtectionStatus(await ipcRenderer.invoke('check-overlay-protection'));
+      } catch {
+        displayProtectionStatus(false);
+      }
+    });
+    const startButton = document.getElementById('start-button');
+    const stopButton = document.getElementById('stop-button');
+    const notesButton = document.getElementById('notes-button');
+    const clearButton = document.getElementById('clear-button');
+    const retryButton = document.getElementById('retry-button');
+    const answerButton = document.getElementById('answer-button');
+    const answerBox = document.getElementById('answer');
+    const answerStatus = document.getElementById('answer-status');
+    const questionBox = document.getElementById('question');
+    const autoAnswer = document.getElementById('auto-answer');
+    const audioSource = document.getElementById('audio-source');
+    const audioStatus = document.getElementById('audio-status');
+    const audioLevel = document.getElementById('audio-level');
+    const typedQuestion = document.getElementById('typed-question');
+    const askButton = document.getElementById('ask-button');
+    const status = document.getElementById('status');
+    const transcriptBox = document.getElementById('transcript');
+    const notesBox = document.getElementById('notes');
+
+    let captureStream;
+    let recorder;
+    let transcriptText = '';
+    let transcriptionQueue = Promise.resolve();
+    let captureStartedAt = 0;
+    let stopPromise;
+    let chunkTimer;
+    let captureStopping = false;
+    let recordingMimeType;
+    let failedChunks = [];
+    let pendingChunks = 0;
+    let retryingFailed = false;
+    let audioContext;
+    let inputStreams = [];
+    let meterTimer;
+    let speechSamples = 0;
+    let lastSignalAt = 0;
+    let answerRevision = 0;
+
+    ipcRenderer.on('gemini-retry', (event, message) => {
+      setStatus(message);
+      answerStatus.textContent = message;
+    });
+    ipcRenderer.on('overlay-layout', (event, compact) => {
+      document.body.classList.toggle('compact', compact);
+      document.getElementById('hide-button').textContent = compact ? 'Expand' : 'Compact';
+    });
+    ipcRenderer.on('shortcut-unavailable', () => {
+      document.getElementById('overlay-help').textContent = 'Ctrl+Shift+Space is already in use. Use Compact / Expand on the overlay. The taskbar icon remains available. Check your screen-sharing preview for capture protection.';
+    });
+
+    function setStatus(message, isError = false) {
+      status.textContent = message;
+      status.classList.toggle('error', isError);
+    }
+
+    function appendTranscript(text, elapsedSeconds) {
+      const emptyMessage = transcriptBox.querySelector('.empty');
+      if (emptyMessage) emptyMessage.remove();
+
+      const timestamp = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`;
+      const line = document.createElement('p');
+      line.textContent = `[${timestamp}] ${text}`;
+      transcriptBox.appendChild(line);
+      transcriptText += `${transcriptText ? '\n' : ''}[${timestamp}] ${text}`;
+      transcriptBox.scrollTop = transcriptBox.scrollHeight;
+      notesButton.disabled = false;
+      answerButton.disabled = false;
+    }
+
+    async function blobToBase64(blob) {
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
+      return btoa(binary);
+    }
+
+    async function transcribeChunk(chunk) {
+      const data = await blobToBase64(chunk.blob);
+      const wantsAnswer = autoAnswer.checked;
+      const revision = answerRevision;
+      answerStatus.textContent = wantsAnswer ? 'Listening to captured speech and preparing an English answer...' : 'Automatic answers are off.';
+      const result = await ipcRenderer.invoke(wantsAnswer ? 'analyze-audio' : 'transcribe-audio', {
+        data,
+        mimeType: 'audio/webm',
+        context: transcriptText.slice(-12000)
+      });
+      const text = wantsAnswer ? result.transcript : result;
+      if (text) appendTranscript(text, chunk.elapsedSeconds);
+      if (wantsAnswer && revision === answerRevision) {
+        if (result.answer) {
+          questionBox.textContent = result.question;
+          answerBox.textContent = result.answer;
+          answerStatus.textContent = 'English answer ready.';
+        } else {
+          answerStatus.textContent = text
+            ? 'Speech received. Waiting for a complete question; the previous answer stays visible.'
+            : 'No intelligible speech in this audio. Check the audio source and level meter.';
+        }
+      }
+    }
+
+    function updateFailedChunks() {
+      retryButton.hidden = failedChunks.length === 0;
+      retryButton.textContent = `Retry failed audio (${failedChunks.length})`;
+    }
+
+    function queueChunk(chunk) {
+      pendingChunks++;
+      transcriptionQueue = transcriptionQueue.then(async () => {
+        try {
+          await transcribeChunk(chunk);
+          setStatus(`Audio processed.${failedChunks.length ? ` ${failedChunks.length} failed chunk(s) saved for retry.` : ''}`);
+        } catch (error) {
+          failedChunks.push(chunk);
+          updateFailedChunks();
+          setStatus(`${error.message} Audio kept in memory; use Retry failed audio.`, true);
+          answerStatus.textContent = `No new answer: ${error.message} The audio is saved for retry.`;
+        } finally {
+          pendingChunks--;
+        }
+      });
+    }
+
+    async function retryFailedChunks() {
+      retryingFailed = true;
+      retryButton.disabled = true;
+      const chunks = failedChunks;
+      failedChunks = [];
+      updateFailedChunks();
+      chunks.forEach(queueChunk);
+      await transcriptionQueue;
+      retryingFailed = false;
+      retryButton.disabled = false;
+    }
+
+    function recordNextChunk() {
+      if (captureStopping || !captureStream) return;
+
+      const chunkRecorder = new MediaRecorder(
+        new MediaStream(captureStream.getAudioTracks()),
+        { mimeType: recordingMimeType }
+      );
+      const chunks = [];
+      speechSamples = 0;
+      const elapsedSeconds = Math.floor((Date.now() - captureStartedAt) / 1000);
+      chunkRecorder.addEventListener('dataavailable', event => {
+        if (event.data.size) chunks.push(event.data);
+      });
+      chunkRecorder.addEventListener('stop', () => {
+        if (chunks.length && speechSamples >= 2) {
+          const audioChunk = new Blob(chunks, { type: 'audio/webm' });
+          queueChunk({ blob: audioChunk, elapsedSeconds });
+        } else if (!captureStopping) {
+          setStatus('No speech-level audio detected. Check the meter and selected input.');
+        }
+        if (!captureStopping && captureStream) {
+          if (pendingChunks + failedChunks.length >= 30) {
+            stopCapture();
+            setStatus('Capture paused: too much audio is waiting for Gemini. Retry the saved audio before starting again.', true);
+          } else recordNextChunk();
+        }
+      }, { once: true });
+      chunkRecorder.addEventListener('error', event => {
+        console.error('Audio recorder failed:', event.error);
+        setStatus(event.error?.message || 'Audio recorder failed.', true);
+      });
+
+      recorder = chunkRecorder;
+      chunkRecorder.start();
+      chunkTimer = setTimeout(() => {
+        if (recorder === chunkRecorder && chunkRecorder.state !== 'inactive') {
+          chunkRecorder.stop();
+        }
+      }, 6000);
+    }
+
+    async function prepareAudio() {
+      inputStreams = [];
+      const mode = audioSource.value;
+      if (mode !== 'microphone') {
+        const system = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        inputStreams.push(system);
+        system.getVideoTracks().forEach(track => track.stop());
+        if (!system.getAudioTracks().length) throw new Error('No system audio was provided. Check the Teams speaker output and try again.');
+      }
+      if (mode !== 'system') {
+        const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false });
+        inputStreams.push(mic);
+      }
+      audioContext = new AudioContext();
+      await audioContext.resume();
+      const destination = audioContext.createMediaStreamDestination();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      const sources = inputStreams.map(stream => audioContext.createMediaStreamSource(new MediaStream(stream.getAudioTracks())));
+      sources.forEach(source => { source.connect(destination); source.connect(analyser); });
+      // Nothing connects to the speakers, avoiding microphone feedback.
+      const samples = new Float32Array(analyser.fftSize);
+      lastSignalAt = Date.now();
+      meterTimer = setInterval(() => {
+        analyser.getFloatTimeDomainData(samples);
+        const rms = Math.sqrt(samples.reduce((sum, value) => sum + value * value, 0) / samples.length);
+        audioLevel.value = Math.min(1, rms * 8);
+        if (rms > 0.006) { speechSamples++; lastSignalAt = Date.now(); }
+        audioStatus.textContent = Date.now() - lastSignalAt > 4000
+          ? (mode === 'system' ? 'No Teams audio detected. Play remote speech; your own microphone is not included.' : 'No audio detected. Check microphone permission and input device.')
+          : 'Audio input active. Questions are processed in 6-second chunks.';
+      }, 100);
+      return destination.stream;
+    }
+
+    function releaseAudio() {
+      clearInterval(meterTimer);
+      inputStreams.forEach(stream => stream.getTracks().forEach(track => track.stop()));
+      inputStreams = [];
+      captureStream?.getTracks().forEach(track => track.stop());
+      audioContext?.close().catch(() => {});
+      audioContext = null;
+      audioLevel.value = 0;
+      audioStatus.textContent = 'Audio is stopped.';
+    }
+
+    async function startCapture() {
+      if (pendingChunks || retryingFailed || failedChunks.length >= 30) {
+        setStatus('Finish processing or retry saved audio before starting capture.', true);
+        return;
+      }
+      if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) {
+        setStatus('This Electron/Windows version does not support system audio capture.', true);
+        return;
+      }
+
+      startButton.disabled = true;
+      setStatus('Requesting system audio capture permission...');
+      try {
+        await ipcRenderer.invoke('check-capture-ready');
+        captureStream = await prepareAudio();
+        const audioTracks = captureStream.getAudioTracks();
+        recordingMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : 'audio/webm';
+        audioSource.disabled = true;
+        captureStartedAt = Date.now();
+        transcriptionQueue = Promise.resolve();
+        captureStopping = false;
+        audioTracks[0].addEventListener('ended', () => {
+          stopCapture();
+        }, { once: true });
+
+        recordNextChunk();
+        stopButton.disabled = false;
+        setStatus('Listening. English answers appear automatically after a complete question is captured.');
+      } catch (error) {
+        console.error('Could not start system audio capture:', error);
+        clearTimeout(chunkTimer);
+        captureStopping = true;
+        releaseAudio();
+        audioSource.disabled = false;
+        captureStream = null;
+        recorder = null;
+        captureStopping = false;
+        startButton.disabled = false;
+        const message = error instanceof Error ? error.message : String(error);
+        setStatus(`Could not start capture: ${message}`, true);
+      }
+    }
+
+    async function stopCapture() {
+      if (stopPromise) return stopPromise;
+      const activeRecorder = recorder;
+      const activeStream = captureStream;
+      if (!activeRecorder) return;
+
+      captureStopping = true;
+      clearTimeout(chunkTimer);
+      stopButton.disabled = true;
+      stopPromise = new Promise(resolve => {
+        if (activeRecorder.state === 'inactive') {
+          resolve();
+          return;
+        }
+        activeRecorder.addEventListener('stop', resolve, { once: true });
+        activeRecorder.stop();
+      }).then(async () => {
+        releaseAudio();
+        await transcriptionQueue;
+        activeStream?.getTracks().forEach(track => track.stop());
+        recorder = null;
+        captureStream = null;
+        startButton.disabled = false;
+        audioSource.disabled = false;
+        setStatus(failedChunks.length
+          ? `Capture stopped. ${failedChunks.length} audio chunk(s) kept in memory for retry. Retry them before quitting or clearing.`
+          : 'Capture stopped. You can create meeting notes from the transcript.', failedChunks.length > 0);
+      }).catch(error => {
+        console.error('Could not stop audio capture cleanly:', error);
+        setStatus(`Could not finish capture: ${error.message || error}`, true);
+      }).finally(() => {
+        captureStopping = false;
+        stopPromise = null;
+      });
+      return stopPromise;
+    }
+
+    async function createNotes() {
+      notesButton.disabled = true;
+      setStatus('Creating meeting notes...');
+      try {
+        const notes = await ipcRenderer.invoke('create-meeting-notes', transcriptText);
+        notesBox.textContent = notes;
+        setStatus('Meeting notes are ready.');
+      } catch (error) {
+        console.error('Could not create meeting notes:', error);
+        setStatus(error.message || 'Could not create meeting notes.', true);
+      } finally {
+        notesButton.disabled = transcriptText.length === 0;
+      }
+    }
+
+    async function draftAnswer(question = '') {
+      const input = question || transcriptText;
+      if (!input.trim()) { answerStatus.textContent = 'Type a question or capture some speech first.'; return; }
+      const revision = ++answerRevision;
+      answerButton.disabled = true;
+      askButton.disabled = true;
+      questionBox.textContent = question || 'Latest transcribed question';
+      answerStatus.textContent = 'Preparing an English answer...';
+      setStatus('Drafting an answer to the latest question...');
+      try {
+        const answer = await ipcRenderer.invoke('draft-answer', input.slice(-12000));
+        if (revision !== answerRevision) return;
+        answerBox.textContent = answer;
+        answerStatus.textContent = 'English answer ready.';
+        setStatus('Suggested answer is ready.');
+      } catch (error) {
+        answerStatus.textContent = `Could not answer: ${error.message || error}`;
+        setStatus(error.message || 'Could not draft an answer.', true);
+      } finally {
+        answerButton.disabled = !transcriptText;
+        askButton.disabled = false;
+      }
+    }
+
+    function clearContent() {
+      if (recorder || pendingChunks || retryingFailed) {
+        setStatus('Stop transcription before clearing the transcript.', true);
+        return;
+      }
+      transcriptText = '';
+      answerRevision++;
+      failedChunks = [];
+      updateFailedChunks();
+      transcriptBox.innerHTML = '<span class="empty">Transcript will appear here.</span>';
+      notesBox.innerHTML = '<span class="empty">Create notes from the transcript when ready.</span>';
+      answerBox.innerHTML = '<span class="empty">The latest answer will appear here automatically.</span>';
+      questionBox.textContent = '';
+      answerStatus.textContent = 'Listening will automatically answer complete questions.';
+      answerButton.disabled = true;
+      notesButton.disabled = true;
+      setStatus('Ready. Start capture when you have permission to record this meeting.');
+    }
+
+    startButton.addEventListener('click', startCapture);
+    stopButton.addEventListener('click', stopCapture);
+    notesButton.addEventListener('click', createNotes);
+    clearButton.addEventListener('click', clearContent);
+    retryButton.addEventListener('click', retryFailedChunks);
+    answerButton.addEventListener('click', () => draftAnswer());
+    askButton.addEventListener('click', () => {
+      if (typedQuestion.value.trim()) draftAnswer(typedQuestion.value.trim());
+    });
+    typedQuestion.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !askButton.disabled && typedQuestion.value.trim()) draftAnswer(typedQuestion.value.trim());
+    });
+    document.getElementById('hide-button').addEventListener('click', () => ipcRenderer.send('hide-overlay'));
+    document.getElementById('quit-button').addEventListener('click', () => ipcRenderer.send('close-app'));
+  </script>
+</body>
+</html>
