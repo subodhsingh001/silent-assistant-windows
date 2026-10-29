@@ -255,6 +255,8 @@ ipcMain.handle('draft-answer', async (event, transcript, requestId, alreadyAnswe
   }
 });
 
+
+
 ipcMain.handle('create-meeting-notes', async (event, transcript) => {
   if (typeof transcript !== 'string' || transcript.trim().length === 0) {
     throw new Error('There is no transcript to summarize yet.');
